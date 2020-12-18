@@ -6,7 +6,4 @@ public class RemoterTest {
     void taskTest() throws Exception {
 
     }
-
-
-
 }

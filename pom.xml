@@ -17,6 +17,26 @@
             <artifactId>slf4j-api</artifactId>
             <version>1.7.25</version>
         </dependency>
+        <dependency>
+            <groupId>com.alibaba</groupId>
+            <artifactId>fastjson</artifactId>
+            <version>1.2.75</version>
+        </dependency>
+        <dependency>
+            <groupId>cn.xnatural.enet</groupId>
+            <artifactId>enet-event</artifactId>
+            <version>0.0.17</version>
+        </dependency>
+        <dependency>
+            <groupId>cn.xnatural.sched</groupId>
+            <artifactId>sched</artifactId>
+            <version>1.0.0</version>
+        </dependency>
+        <dependency>
+            <groupId>cn.xnatural.aio</groupId>
+            <artifactId>aio</artifactId>
+            <version>1.0.4</version>
+        </dependency>
 
         <dependency>
             <groupId>org.junit.jupiter</groupId>
@@ -35,7 +55,7 @@
 
     <name>remoter</name>
     <description>
-        remoter: 远程调用库. 基于 https://gitee.com/xnat/enet 和 https://gitee.com/xnat/aio
+        remoter: 远程调用. 基于 https://gitee.com/xnat/enet 和 https://gitee.com/xnat/aio
     </description>
 
     <licenses>
