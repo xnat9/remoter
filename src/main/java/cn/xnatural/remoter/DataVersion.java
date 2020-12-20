@@ -1,4 +1,4 @@
-package xntural.cn.remoter;
+package cn.xnatural.remoter;
 
 import cn.xnatural.enet.event.EC;
 
@@ -7,7 +7,7 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import static xntural.cn.remoter.Remoter.log;
+import static cn.xnatural.remoter.Remoter.log;
 
 /**
  * 数据版本同步器, 同步集群数据

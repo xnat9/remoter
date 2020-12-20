@@ -1,4 +1,4 @@
-package xntural.cn.remoter;
+package cn.xnatural.remoter;
 
 import java.util.function.Supplier;
 

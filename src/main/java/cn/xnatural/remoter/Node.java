@@ -1,4 +1,4 @@
-package xntural.cn.remoter;
+package cn.xnatural.remoter;
 
 import java.io.Serializable;
 
@@ -35,10 +35,11 @@ class Node implements Serializable {
      */
     Long _uptime;
 
+
     @Override
     public String toString() {
-        return "Node{" +
-                "id='" + id + '\'' +
+        return "Node@" + Integer.toHexString(hashCode()) +
+                "{id='" + id + '\'' +
                 ", name='" + name + '\'' +
                 ", tcp='" + tcp + '\'' +
                 ", http='" + http + '\'' +

@@ -1,4 +1,4 @@
-package xntural.cn.remoter;
+package cn.xnatural.remoter;
 
 import cn.xnatural.aio.AioBase;
 import cn.xnatural.aio.AioClient;
@@ -13,17 +13,24 @@ import com.alibaba.fastjson.JSONArray;
 import com.alibaba.fastjson.JSONException;
 import com.alibaba.fastjson.JSONObject;
 import com.alibaba.fastjson.parser.Feature;
+import com.alibaba.fastjson.serializer.SerializerFeature;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.UnsupportedEncodingException;
+import java.math.BigDecimal;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 /**
  * 集群分布式 核心类
@@ -226,13 +233,11 @@ public class Remoter extends AioBase {
             };
             doSend.accept(nodes.findRandom(predicate), failFn);
         } else if ("all".equals(target)) { // 网络不可靠
-            nodes.withReadLock(() -> {
-                nodes.iterator().forEachRemaining(node -> {
-                    if (predicate.test(node)) {
-                        exec.execute(() -> doSend.accept(node, null));
-                    }
-                });
-            });
+            nodes.withReadLock(() -> nodes.iterator().forEachRemaining(node -> {
+                if (predicate.test(node)) {
+                    exec.execute(() -> doSend.accept(node, null));
+                }
+            }));
         } else {
             throw new IllegalArgumentException("Not support target '" + target + "'");
         }
@@ -274,15 +279,13 @@ public class Remoter extends AioBase {
                 // log.warn("'${name}.masterHps' not config");
                 return;
             }
-            doSyncFn.run();
+            doSyncFn.get().run();
             // lastSyncSuccess = System.currentTimeMillis()
         } catch (Exception ex) {
-            sched.after(Duration.ofSeconds(getInteger('errorUpInterval', 30) + new Random().nextInt(60)), {sync()})
-            log.error("App up error. " + (ex.message?:ex.class.simpleName), ex)
+            sched.after(Duration.ofSeconds(getInteger("errorUpInterval", 30) + new Random().nextInt(60)), this::sync);
+            log.error("App up error", ex);
         }
     }
-
-
 
 
     /**
@@ -405,17 +408,312 @@ public class Remoter extends AioBase {
             String[] arr = msgJo.getString("data").split(":");
             // Log.setLevel(arr[0].trim(), arr[1].trim())
             //stream.reply("set log level success".getBytes(_charset.get()));
-        } else if (t && t.startsWith("ls ")) {
+        } else if (t != null && t.startsWith("ls ")) {
             // {"type":"ls apps"}
-            def arr = t.split(" ")
-            if (arr?[1] = "apps") { // ls apps
-                stream.reply(JSON.toJSONString(nodeMap).getBytes("utf-8"));
-            } else if (arr?[1] == 'app' && arr?[2]) { // ls app gy
-                stream.reply(JSON.toJSONString(nodeMap[arr?[2]]).getBytes(_charset.get()));
+            String[] arr = t.split(" ");
+            if (arr.length > 0 && "apps".equalsIgnoreCase(arr[1])) { // ls apps
+                stream.reply(JSON.toJSONString(nodeMap).getBytes(_charset.get()));
+            } else if (arr.length > 1 && "app".equalsIgnoreCase(arr[1])) { // ls app gy
+                stream.reply(JSON.toJSONString(nodeMap.get(arr[2])).getBytes(_charset.get()));
             }
         } else {
-            log.error("Not support exchange data type '{}'", t)
-            stream.close()
+            log.error("Not support exchange data type '{}'", t);
+            stream.close();
         }
     }
+
+
+    /**
+     * 接收远程回响的消息
+     * @param reply 回应消息
+     * @param se AioSession
+     */
+    protected void receiveReply(final String reply, final AioStream se) {
+        log.trace("Receive reply from '{}': {}", se.getRemoteAddress(), reply);
+        JSONObject jo = JSON.parseObject(reply, Feature.OrderedField);
+        if ("updateAppInfo".equals(jo.getString("type"))) {
+            updateAppInfo(jo.getJSONObject("data"));
+        }
+        else if ("event".equals(jo.getString("type"))) {
+            receiveEventResp(jo.getJSONObject("data"));
+        }
+    }
+
+
+    /**
+     * 接收远程事件返回的数据. 和 {@link #doFire(EC, String, String, List)} 对应
+     * @param data
+     */
+    protected void receiveEventResp(JSONObject data) {
+        log.debug("Receive event response: {}", data);
+        EC ec = ecMap.remove(data.getString("id"));
+        if (ec != null) ec.errMsg(data.getString("exMsg")).result(data.get("result")).resume().tryFinish();
+    }
+
+
+    /**
+     * 接收远程事件的执行请求
+     * @param data 数据
+     * @param se AioSession
+     */
+    protected void receiveEventReq(final JSONObject data, final AioStream se) {
+        log.debug("Receive event request: {}", data);
+        boolean fReply = (Boolean.TRUE == data.getBoolean("reply")); // 是否需要响应
+        try {
+            String eId = data.getString("id");
+            String eName = data.getString("name");
+
+            final EC ec = new EC();
+            ec.id(eId);
+            // 组装方法参数
+            ec.args(data.getJSONArray("args") == null ? null : data.getJSONArray("args").stream().map(o -> {
+                JSONObject jo = (JSONObject) o;
+                String t = jo.getString("type");
+                if (jo.isEmpty()) return null; // 参数为null
+                else if (String.class.getName().equals(t)) return jo.getString("value");
+                else if (Boolean.class.getName().equals(t)) return jo.getBoolean("value");
+                else if (Integer.class.getName().equals(t)) return jo.getInteger("value");
+                else if (Long.class.getName().equals(t)) return jo.getLong("value");
+                else if (Double.class.getName().equals(t)) return jo.getDouble("value");
+                else if (Short.class.getName().equals(t)) return jo.getShort("value");
+                else if (Float.class.getName().equals(t)) return jo.getFloat("value");
+                else if (BigDecimal.class.getName().equals(t)) return jo.getBigDecimal("value");
+                else if (JSONObject.class.getName().equals(t) || Map.class.getName().equals(t)) return jo.getJSONObject("value");
+                else if (JSONArray.class.getName().equals(t) || List.class.getName().equals(t)) return jo.getJSONArray("value");
+                else throw new IllegalArgumentException("Not support parameter type '" + t + "'");
+            }).toArray());
+
+            if (fReply) { // 是否需要响应结果给远程的调用方
+                ec.completeFn(() -> {
+                    JSONObject result = new JSONObject(3);
+                    result.put("id", ec.id());
+                    if (!ec.isSuccess()) { result.put("exMsg", ec.failDesc()); }
+                    result.put("result", ec.result);
+                    se.reply(JSON.toJSONString(
+                            new JSONObject(3)
+                                    .fluentPut("type", "event")
+                                    .fluentPut("source", new JSONObject(2).fluentPut("name", appName).fluentPut("id", appId))
+                                    .fluentPut("data", result),
+                            SerializerFeature.WriteMapNullValue
+                    ).getBytes(_charset.get()));
+                });
+            }
+            ep.fire(eName, ec.sync()); // 同步执行, 没必要异步去切换线程
+        } catch (Exception ex) {
+            log.error("invoke event error. data: " + data, ex);
+            if (fReply) {
+                JSONObject result = new JSONObject(3);
+                result.put("id", data.getString("id"));
+                result.put("result", null);
+                result.put("exMsg", ex.getMessage() != null ? ex.getMessage(): ex.getClass().getName());
+                JSONObject res = new JSONObject(3)
+                        .fluentPut("type", "event")
+                        .fluentPut("source", new JSONObject(2).fluentPut("name", appName).fluentPut("id", appId))
+                        .fluentPut("data", result);
+                se.reply(JSON.toJSONString(res, SerializerFeature.WriteMapNullValue).getBytes(_charset.get()));
+            }
+        }
+    }
+
+
+    /**
+     * client -> master
+     * 接收集群应用的数据上传, 应用上线通知
+     * NOTE: 此方法线程已安全
+     * id 和 tcp 必须唯一
+     * @param data 节点应用上传的数据 {"name": "应用名", "id": "应用实例id", "tcp":"host:port", "http":"host:port", "udp": "host:port"}
+     * @param se {@link AioStream}
+     */
+    protected void appUp(final Map data, final AioStream se) {
+        if (data == null || data.get("name") == null || data.get("tcp") == null || data.get("id") == null) { // 数据验证
+            log.warn("Node up data incomplete: " + data);
+            return;
+        }
+        if (appId.equals(data.get("id").toString()) && se != null) return; // 不接收本应用的数据
+        data.put("_uptime", System.currentTimeMillis());
+        log.debug("Receive node up: {}", data);
+
+        //1. 先删除之前的数据,再添加新的
+        AtomicBoolean isNew = new AtomicBoolean(true);
+        final SafeList<Node> apps = nodeMap.computeIfAbsent(data.get("name").toString(), (s) -> new SafeList<Node>());
+        apps.withReadLock(() -> {
+            for (Iterator<Node> itt = apps.iterator(); itt.hasNext(); ) {
+                Node node = itt.next();
+                if (node.id.equals(data.get("id"))) { // 更新
+                    node.tcp = (String) data.get("tcp"); node.http = (String) data.get("http"); node.udp = (String) data.get("udp"); node.master = (Boolean) data.get("master"); node._uptime = (Long) data.get("_uptime");
+                    isNew.set(false); break;
+                }
+            }
+        });
+        if (isNew.get()) { // 新增
+            Node node = new Node();
+            node.id = (String) data.get("id");
+            node.name = (String) data.get("name");
+            node.tcp = (String) data.get("tcp");
+            node.http = (String) data.get("http");
+            node.master = (Boolean) data.get("master");
+            node._uptime = (Long) data.get("_uptime");
+            apps.add(node);
+            log.info("New node online. {}", node);
+        }
+
+        //2. 遍历所有的数据, 删除不必要的数据, 同步注册信息
+        for (Iterator<Map.Entry<String, SafeList<Node>>> itt = nodeMap.entrySet().iterator(); itt.hasNext(); ) {
+            Map.Entry<String, SafeList<Node>> e = itt.next();
+            e.getValue().withWriteLock(() -> {
+                for (Iterator<Node> itt2 = e.getValue().iterator(); itt2.hasNext(); ) {
+                    final Node node = itt2.next();
+                    // 删除空的坏数据
+                    if (node == null) {itt2.remove(); continue;}
+                    // 删除和当前up的节点相同的tcp的节点(节点重启,但节点上次的信息还没被移除)
+                    if (node.id.equals(data.get("id")) && node.tcp.equals(data.get("tcp"))) {
+                        itt2.remove();
+                        log.info("Drop same tcp expire node: {}", node);
+                        continue;
+                    }
+                    // 删除一段时间未活动的注册信息, dropAppTimeout 单位: 分钟
+                    if ((System.currentTimeMillis() - node._uptime > getInteger("dropAppTimeout", 15) * 60 * 1000) && appId.equals(node.id)) {
+                        itt2.remove();
+                        log.warn("Drop timeout node: {}", node);
+                        continue;
+                    }
+                    // 更新当前App up的时间
+                    if (node.id.equals(appId) && (System.currentTimeMillis() - node._uptime > 1000 * 60)) { // 超过1分钟更新一次,不必每次更新
+                        node._uptime = System.currentTimeMillis();
+                        Map<String, Object> self = getAppInfo(); // 判断当前机器ip是否变化
+                        if (self != null && !node.tcp.equals(self.get("tcp"))) {
+                            node.tcp = (String) self.get("tcp"); node.http = (String) self.get("http"); node.udp = (String) self.get("udp"); node.master = (Boolean) self.get("master");
+                        }
+                    }
+                    // 返回所有的注册信息给当前来注册的客户端应用
+                    if (node.id.equals(data.get("id")) && se != null) {
+                        se.reply(new JSONObject(2).fluentPut("type", "updateAppInfo").fluentPut("data", JSON.toJSON(node)).toString().getBytes(_charset.get()));
+                    }
+                }
+            });
+            // 删除没有对应的服务信息的应用
+            if (e.getValue().isEmpty()) {itt.remove(); continue;}
+            // 如果是新系统上线, 则主动通知其它系统
+            if (isNew.get() && appId.equals(data.get("id")) && e.getValue().size() > 0) {
+                ep.fire("remote", EC.of(this).async(true).attr("toAll", true).args(e.getKey(), "updateAppInfo", Arrays.asList(data)));
+            }
+        }
+    }
+
+
+    /**
+     * host:port
+     */
+    class Hp {
+        String host; Integer port;
+        public Hp(String host, Integer port) {
+            this.host = host;this.port = port;
+        }
+    }
+
+    /**
+     * 远程数据同步函数
+     */
+    final LazySupplier<Runnable> doSyncFn = new LazySupplier<>(() -> new Runnable() {
+        // 数据上传的应用集(host1:port1,host2:port2 ...)
+        final List<Hp> hps = _masterHps.get() == null ? null : Arrays.stream(_masterHps.get().split(",")).map(hp -> {
+            if (hp == null) return null;
+            try {
+                String[] arr = hp.split(":");
+                String host = arr[0].trim();
+                return new Hp(host.isEmpty() ? "127.0.0.1" : host, Integer.valueOf(arr[1].trim()));
+            } catch (Exception ex) {
+                log.error("'masterHps' config error. " + hp, ex);
+            }
+            return null;
+        }).filter(Objects::nonNull).collect(Collectors.toList());
+
+        // 本应用的hps(多个host:port)
+        final Set<String> selfHps = ((Supplier<Set<String>>) () -> {
+            Set<String> hps = new HashSet<>();
+            String hpCfg = getStr("hp", "");
+            String[] arr = hpCfg.split(":");
+            if (arr[0] != null && !arr[0].isEmpty()) { // 如果指定了绑定ip
+                hps.add(hpCfg);
+            } else { // 如果没指定绑定ip,则把本机所有ip
+                hps.add("localhost:" + arr[1]);
+                hps.add("127.0.0.1:" + arr[1]);
+                hps.add(AioServer.ipv4() + ":" + arr[1]);
+            }
+            String exposeTcp = getStr("exposeTcp", null);
+            if (exposeTcp != null && !exposeTcp.isEmpty()) hps.add(exposeTcp);
+            return hps;
+        }).get();
+
+        /**
+         * 上传本应用数据到集群
+         * @param data
+         */
+        void upToHps(String data) {
+            // 如果是域名,得到所有Ip, 除本机上的本应用
+            List<Hp> ls = hps.stream().flatMap(hp -> {
+                    try {
+                        return Arrays.stream(InetAddress.getAllByName(hp.host))
+                                .map(addr -> {
+                                    if (selfHps.contains(addr.getHostAddress()+ ":" +hp.port)) return null;
+                                        else return new Hp(addr.getHostAddress(), hp.port);
+                                    });
+                    } catch (UnknownHostException e) {
+                        log.error("", e);
+                    }
+                return null;
+            }).collect(Collectors.toList());
+            if (ls.isEmpty()) return;
+
+            if (_master.get()) { // 如果是master, 则同步所有
+                ls.forEach(hp -> aioClient.send(hp.host, hp.port, data.getBytes(_charset.get())));
+                log.debug("App up success. {}", data);
+            } else {
+                Hp hp = ls.get(new Random().nextInt(ls.size()));
+                aioClient.send(hp.host, hp.port, data.getBytes(_charset.get()), ex -> {
+                    log.warn("App up fail. " + data, ex);
+                }, (se) -> {
+                    log.debug("App up success. {}", data);
+                });
+            }
+        }
+
+        @Override
+        public void run() {
+            if (hps.isEmpty()) {
+                log.warn("Not found available master app, please check config 'masterHps'");
+                return;
+            }
+            String data = ((Supplier<String>) () -> { // 构建上传的数据格式
+                Map<String, Object> info = getAppInfo();
+                if (info == null || info.isEmpty()) return null;
+                return new JSONObject(3).fluentPut("type", "appUp")
+                        .fluentPut("source", new JSONObject(2).fluentPut("name", appName).fluentPut("id", appId))
+                        .fluentPut("data", info)
+                        .toString();
+            }).get();
+            if (data == null) return;
+
+            upToHps(data); //数据上传
+            dataVersionMap.forEach((s, dataVersion) -> dataVersion.sync()); //集群版本数据同步
+        }
+    });
+
+
+    /**
+     * 应用自己的信息
+     * 例: {"id":"gy_GRLD5JhT4g", "name":"rc", "tcp":"192.168.2.104:8001", "http":"192.168.2.104:8000", "master": true}
+     */
+    public Map<String, Object> getAppInfo() {
+        Map<String, Object> info = new LinkedHashMap(5);
+        info.put("id", appId);
+        info.put("name", appName);
+        // http
+        info.put("http", getStr("exposeHttp", (String) ep.fire("http.hp")));
+        // tcp
+        info.put("tcp", getStr("exposeTcp", aioServer.getHp()));
+        info.put("master", _master.get());
+        return info;
+    }
+
 }
