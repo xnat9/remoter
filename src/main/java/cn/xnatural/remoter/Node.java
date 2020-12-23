@@ -39,11 +39,11 @@ class Node implements Serializable {
     @Override
     public String toString() {
         return "Node@" + Integer.toHexString(hashCode()) +
-                "{id='" + id + '\'' +
-                ", name='" + name + '\'' +
-                ", tcp='" + tcp + '\'' +
-                ", http='" + http + '\'' +
-                ", udp='" + udp + '\'' +
+                "{id=" + id +
+                ", name=" + name +
+                ", tcp=" + tcp +
+                ", http=" + http +
+                ", udp=" + udp +
                 ", master=" + master +
                 ", _uptime=" + _uptime +
                 '}';

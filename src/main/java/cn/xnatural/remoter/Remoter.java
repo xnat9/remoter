@@ -33,6 +33,7 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 /**
+ * 基于 https:/gitee/xnat/enet 做的远程事件
  * 集群分布式 核心类
  * 多应用之间的连接器,简化跨系统调用
  * 依赖 {@link AioServer}, {@link AioClient}
@@ -95,14 +96,24 @@ public class Remoter extends AioBase {
      * 是否为master
      * true: 则向同为master的应用同步集群应用信息, false: 只向 masterHps 指向的服务同步集群应用信息
      */
-    protected final LazySupplier<Boolean>          _master        = new LazySupplier(() -> attrs.getOrDefault("master", false));
+    protected final LazySupplier<Boolean>          _master        = new LazySupplier(() -> Boolean.valueOf(attrs.getOrDefault("master", false).toString()));
     /**
      * 数据编码
      */
     protected final LazySupplier<String>           _charset       = new LazySupplier(() -> attrs.getOrDefault("charset", "utf-8"));
 
 
+    /**
+     *
+     * @param appName 当前应用名
+     * @param appId 当前应用实例id
+     * @param attrs 属性集
+     * @param exec 线程池
+     * @param ep 事件中心
+     * @param sched 定时任务调度
+     */
     public Remoter(String appName, String appId, Map<String, Object> attrs, ExecutorService exec, EP ep, Sched sched) {
+        super(attrs, exec);
         if (appName == null || appName.isEmpty()) throw new IllegalArgumentException("appName must not be empty");
         this.appName = appName;
         this.appId = appId == null || appId.isEmpty() ? UUID.randomUUID().toString().replace("-", "") : appId;
@@ -110,15 +121,32 @@ public class Remoter extends AioBase {
         this.exec = exec == null ? Executors.newFixedThreadPool(4, new ThreadFactory() {
             AtomicInteger i = new AtomicInteger(1);
             @Override
-            public Thread newThread(Runnable r) {
-                return new Thread(r, "remoter-" + i.getAndIncrement());
-            }
+            public Thread newThread(Runnable r) { return new Thread(r, "remoter-" + i.getAndIncrement()); }
         }) : exec;
         this.ep = ep == null ? new EP(exec) : ep;
         this.ep.addListenerSource(this);
         this.sched = sched == null ? new Sched() : sched;
-        this.aioClient = new AioClient(attrs, exec);
-        this.aioServer = new AioServer(attrs, exec);
+        attrs.putIfAbsent("delimiter", "\n");
+        this.aioClient = new AioClient(attrs, exec) {
+            @Override
+            protected void receive(byte[] bs, AioStream stream) {
+                try {
+                    receiveReply(new String(bs, _charset.get()), stream);
+                } catch (Exception e) {
+                    log.error("client receive reply error", e);
+                }
+            }
+        };
+        this.aioServer = new AioServer(attrs, exec) {
+            @Override
+            protected void receive(byte[] bs, AioStream stream) {
+                try {
+                    receiveMsg(new String(bs, _charset.get()), stream);
+                } catch (Exception e) {
+                    log.error("server receive msg error", e);
+                }
+            }
+        };
         this.aioServer.start();
     }
 
@@ -127,8 +155,7 @@ public class Remoter extends AioBase {
      * stop
      */
     public void stop() {
-        aioClient.stop();
-        aioServer.stop();
+        aioClient.stop(); aioServer.stop();
     }
 
 
@@ -269,6 +296,27 @@ public class Remoter extends AioBase {
 
 
     /**
+     * 开始自动心跳
+     */
+    public void autoHeartbeat() {
+        final Supplier<Duration> nextTimeFn =() -> {
+            Integer minInterval = getInteger("minInterval", 60);
+            Integer randomInterval = getInteger("randomInterval", 180);
+            return Duration.ofSeconds(minInterval + new Random().nextInt(randomInterval));
+        };
+        // 每隔一段时间触发一次心跳, 1~4分钟随机心跳
+        final Runnable fn = new Runnable() {
+            @Override
+            public void run() {
+                sync();
+                ep.fire("sched.after", nextTimeFn.get(), this);
+            }
+        };
+        fn.run();
+    }
+
+
+    /**
      * 集群应用同步函数
      * 监听系统心跳事件, 随心跳去向master同步集群应用信息
      */
@@ -395,12 +443,10 @@ public class Remoter extends AioBase {
                 log.warn("Not allow register up to self");
                 stream.close(); return;
             }
-            queue(APP_UP) {
-                JSONObject d = null;
-                try { d = msgJo.getJSONObject("data"); appUp(d, stream); }
-                catch (Exception ex) {
-                    log.error("App up error!. data: " + d, ex);
-                }
+            JSONObject d = null;
+            try { d = msgJo.getJSONObject("data"); appUp(d, stream); }
+            catch (Exception ex) {
+                log.error("App up error!. data: " + d, ex);
             }
         } else if ("cmd-log".equals(t)) { // telnet 命令行设置日志等级
             // telnet localhost 8001
@@ -412,9 +458,17 @@ public class Remoter extends AioBase {
             // {"type":"ls apps"}
             String[] arr = t.split(" ");
             if (arr.length > 0 && "apps".equalsIgnoreCase(arr[1])) { // ls apps
-                stream.reply(JSON.toJSONString(nodeMap).getBytes(_charset.get()));
+                try {
+                    stream.reply(JSON.toJSONString(nodeMap).getBytes(_charset.get()));
+                } catch (UnsupportedEncodingException e) {
+                    throw new RuntimeException(e);
+                }
             } else if (arr.length > 1 && "app".equalsIgnoreCase(arr[1])) { // ls app gy
-                stream.reply(JSON.toJSONString(nodeMap.get(arr[2])).getBytes(_charset.get()));
+                try {
+                    stream.reply(JSON.toJSONString(nodeMap.get(arr[2])).getBytes(_charset.get()));
+                } catch (UnsupportedEncodingException e) {
+                    throw new RuntimeException(e);
+                }
             }
         } else {
             log.error("Not support exchange data type '{}'", t);
@@ -484,18 +538,19 @@ public class Remoter extends AioBase {
             }).toArray());
 
             if (fReply) { // 是否需要响应结果给远程的调用方
-                ec.completeFn(() -> {
-                    JSONObject result = new JSONObject(3);
+                JSONObject result = new JSONObject(3);
+                byte[] bs = JSON.toJSONString(
+                        new JSONObject(3)
+                                .fluentPut("type", "event")
+                                .fluentPut("source", new JSONObject(2).fluentPut("name", appName).fluentPut("id", appId))
+                                .fluentPut("data", result),
+                        SerializerFeature.WriteMapNullValue
+                ).getBytes(_charset.get());
+                ec.completeFn((ec1) -> {
                     result.put("id", ec.id());
                     if (!ec.isSuccess()) { result.put("exMsg", ec.failDesc()); }
                     result.put("result", ec.result);
-                    se.reply(JSON.toJSONString(
-                            new JSONObject(3)
-                                    .fluentPut("type", "event")
-                                    .fluentPut("source", new JSONObject(2).fluentPut("name", appName).fluentPut("id", appId))
-                                    .fluentPut("data", result),
-                            SerializerFeature.WriteMapNullValue
-                    ).getBytes(_charset.get()));
+                    se.reply(bs);
                 });
             }
             ep.fire(eName, ec.sync()); // 同步执行, 没必要异步去切换线程
@@ -510,7 +565,11 @@ public class Remoter extends AioBase {
                         .fluentPut("type", "event")
                         .fluentPut("source", new JSONObject(2).fluentPut("name", appName).fluentPut("id", appId))
                         .fluentPut("data", result);
-                se.reply(JSON.toJSONString(res, SerializerFeature.WriteMapNullValue).getBytes(_charset.get()));
+                try {
+                    se.reply(JSON.toJSONString(res, SerializerFeature.WriteMapNullValue).getBytes(_charset.get()));
+                } catch (UnsupportedEncodingException e) {
+                    throw new RuntimeException(e);
+                }
             }
         }
     }
@@ -535,7 +594,7 @@ public class Remoter extends AioBase {
 
         //1. 先删除之前的数据,再添加新的
         AtomicBoolean isNew = new AtomicBoolean(true);
-        final SafeList<Node> apps = nodeMap.computeIfAbsent(data.get("name").toString(), (s) -> new SafeList<Node>());
+        final SafeList<Node> apps = nodeMap.computeIfAbsent(data.get("name").toString(), (s) -> new SafeList<>());
         apps.withReadLock(() -> {
             for (Iterator<Node> itt = apps.iterator(); itt.hasNext(); ) {
                 Node node = itt.next();
@@ -587,7 +646,11 @@ public class Remoter extends AioBase {
                     }
                     // 返回所有的注册信息给当前来注册的客户端应用
                     if (node.id.equals(data.get("id")) && se != null) {
-                        se.reply(new JSONObject(2).fluentPut("type", "updateAppInfo").fluentPut("data", JSON.toJSON(node)).toString().getBytes(_charset.get()));
+                        try {
+                            se.reply(new JSONObject(2).fluentPut("type", "updateAppInfo").fluentPut("data", JSON.toJSON(node)).toString().getBytes(_charset.get()));
+                        } catch (UnsupportedEncodingException ex) {
+                            throw new RuntimeException(ex);
+                        }
                     }
                 }
             });
@@ -598,6 +661,61 @@ public class Remoter extends AioBase {
                 ep.fire("remote", EC.of(this).async(true).attr("toAll", true).args(e.getKey(), "updateAppInfo", Arrays.asList(data)));
             }
         }
+    }
+
+
+    /**
+     * master -> client
+     * 更新 app 信息
+     * @param data app node信息
+     *  例: {"name":"rc", "id":"rc_b70d18d52269451291ea6380325e2a84", "tcp":"192.168.56.1:8001","http":"localhost:8000"}
+     *  属性不为空: name, id, tcp
+     */
+    @EL(name = "updateAppInfo", async = false)
+    protected void updateAppInfo(final JSONObject data) {
+        if (data == null || data.get("name") == null || data.get("tcp") == null || data.get("id") == null) { // 数据验证
+            log.warn("App up data incomplete: " + data);
+            return;
+        }
+        Map<String, Object> appInfo = getAppInfo();
+        if (appId.equals(data.getString("id")) || (appInfo != null && Objects.equals(appInfo.get("tcp"), data.getString("tcp")))) return; // 不把系统本身的信息放进去
+        log.trace("Update app info: {}", data);
+
+        SafeList<Node> apps = nodeMap.computeIfAbsent(data.getString("name"), s -> new SafeList<>());
+        apps.withWriteLock(() -> {
+            boolean add = true;
+            for (Iterator<Node> itt = apps.iterator(); itt.hasNext(); ) {
+                final Node node = itt.next();
+                if (node.id.equals(data.getString("id"))) { // 更新
+                    add = false;
+                    if (data.getLong("_uptime") > node._uptime) {
+                        node.tcp = data.getString("tcp"); node.http = data.getString("http"); node.udp = data.getString("udp"); node.master = data.getBoolean("master"); node._uptime = data.getLong("_uptime");
+                        log.trace("Update node info: {}", node);
+                    }
+                    break;
+                } else if (node.tcp.equals(data.getString("tcp"))) {
+                    if (data.getLong("_uptime") > node._uptime) { // 删除 tcp 相同, id 不同, 已过期的节点
+                        itt.remove();
+                        log.info("Drop same tcp expire node: {}", node);
+                    } else add = false;
+                    break;
+                } else if (System.currentTimeMillis() - node._uptime > getInteger("dropAppTimeout", 15) * 60 * 1000 && node.id != appId) {
+                    itt.remove(); // 删除过期不活动的的节点
+                    log.warn("Drop timeout node: {}", node);
+                }
+            }
+            if (add) {
+                Node node = new Node();
+                node.id = (String) data.get("id");
+                node.name = (String) data.get("name");
+                node.tcp = (String) data.get("tcp");
+                node.http = (String) data.get("http");
+                node.master = (Boolean) data.get("master");
+                node._uptime = (Long) data.get("_uptime");
+                apps.add(node);
+                log.info("New node added. '{}'", node);
+            }
+        });
     }
 
 
@@ -649,7 +767,7 @@ public class Remoter extends AioBase {
          * 上传本应用数据到集群
          * @param data
          */
-        void upToHps(String data) {
+        void upToHps(String data) throws Exception {
             // 如果是域名,得到所有Ip, 除本机上的本应用
             List<Hp> ls = hps.stream().flatMap(hp -> {
                     try {
@@ -666,7 +784,9 @@ public class Remoter extends AioBase {
             if (ls.isEmpty()) return;
 
             if (_master.get()) { // 如果是master, 则同步所有
-                ls.forEach(hp -> aioClient.send(hp.host, hp.port, data.getBytes(_charset.get())));
+                for (Hp hp : ls) {
+                    aioClient.send(hp.host, hp.port, data.getBytes(_charset.get()));
+                }
                 log.debug("App up success. {}", data);
             } else {
                 Hp hp = ls.get(new Random().nextInt(ls.size()));
@@ -684,18 +804,21 @@ public class Remoter extends AioBase {
                 log.warn("Not found available master app, please check config 'masterHps'");
                 return;
             }
-            String data = ((Supplier<String>) () -> { // 构建上传的数据格式
-                Map<String, Object> info = getAppInfo();
-                if (info == null || info.isEmpty()) return null;
-                return new JSONObject(3).fluentPut("type", "appUp")
-                        .fluentPut("source", new JSONObject(2).fluentPut("name", appName).fluentPut("id", appId))
-                        .fluentPut("data", info)
-                        .toString();
-            }).get();
-            if (data == null) return;
-
-            upToHps(data); //数据上传
-            dataVersionMap.forEach((s, dataVersion) -> dataVersion.sync()); //集群版本数据同步
+            try {
+                String data = ((Supplier<String>) () -> { // 构建上传的数据格式
+                    Map<String, Object> info = getAppInfo();
+                    if (info == null || info.isEmpty()) return null;
+                    return new JSONObject(3).fluentPut("type", "appUp")
+                            .fluentPut("source", new JSONObject(2).fluentPut("name", appName).fluentPut("id", appId))
+                            .fluentPut("data", info)
+                            .toString();
+                }).get();
+                if (data == null) return;
+                upToHps(data); //数据上传
+                dataVersionMap.forEach((s, dataVersion) -> dataVersion.sync()); //集群版本数据同步
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         }
     });
 
@@ -716,4 +839,17 @@ public class Remoter extends AioBase {
         return info;
     }
 
+
+    /**
+     * getter {@link AioClient}
+     * @return
+     */
+    public AioClient getAioClient() { return aioClient; }
+
+
+    /**
+     * getter {@link AioServer}
+     * @return
+     */
+    public AioServer getAioServer() { return aioServer; }
 }
