@@ -104,7 +104,7 @@ public class Remoter extends AioBase {
 
 
     /**
-     *
+     * 创建 {@link Remoter}
      * @param appName 当前应用名
      * @param appId 当前应用实例id
      * @param attrs 属性集
@@ -124,10 +124,11 @@ public class Remoter extends AioBase {
             public Thread newThread(Runnable r) { return new Thread(r, "remoter-" + i.getAndIncrement()); }
         }) : exec;
         this.ep = ep == null ? new EP(exec) : ep;
-        this.ep.addListenerSource(this);
-        this.sched = sched == null ? new Sched() : sched;
-        attrs.putIfAbsent("delimiter", "\n");
-        this.aioClient = new AioClient(attrs, exec) {
+        if (ep == null) this.ep.addListenerSource(this);
+        this.sched = sched == null ? new Sched(null, exec).init() : sched;
+        this.attrs.putIfAbsent("delimiter", "\n"); //默认数据交互分割符 为换行符
+        this.attrs.putIfAbsent("hp", ":7070"); //默认暴露集群数据交互端口 7070
+        this.aioClient = new AioClient(this.attrs, this.exec) {
             @Override
             protected void receive(byte[] bs, AioStream stream) {
                 try {
@@ -137,7 +138,7 @@ public class Remoter extends AioBase {
                 }
             }
         };
-        this.aioServer = new AioServer(attrs, exec) {
+        this.aioServer = new AioServer(this.attrs, this.exec) {
             @Override
             protected void receive(byte[] bs, AioStream stream) {
                 try {
@@ -148,6 +149,16 @@ public class Remoter extends AioBase {
             }
         };
         this.aioServer.start();
+    }
+
+    /**
+     * 创建 {@link #Remoter(String, String, Map, ExecutorService, EP, Sched)}
+     * @param appName 当前应用名
+     * @param appId 当前应用实例id
+     * @param attrs 属性集
+     */
+    public Remoter(String appName, String appId, Map<String, Object> attrs) {
+        this(appName, appId, attrs, null, null, null);
     }
 
 
@@ -298,10 +309,10 @@ public class Remoter extends AioBase {
     /**
      * 开始自动心跳
      */
-    public void autoHeartbeat() {
+    public Remoter autoHeartbeat() {
         final Supplier<Duration> nextTimeFn =() -> {
             Integer minInterval = getInteger("minInterval", 60);
-            Integer randomInterval = getInteger("randomInterval", 180);
+            Integer randomInterval = getInteger("randomInterval", 140);
             return Duration.ofSeconds(minInterval + new Random().nextInt(randomInterval));
         };
         // 每隔一段时间触发一次心跳, 1~4分钟随机心跳
@@ -309,18 +320,18 @@ public class Remoter extends AioBase {
             @Override
             public void run() {
                 sync();
-                ep.fire("sched.after", nextTimeFn.get(), this);
+                sched.after(nextTimeFn.get(), this);
             }
         };
         fn.run();
+        return this;
     }
 
 
     /**
      * 集群应用同步函数
-     * 监听系统心跳事件, 随心跳去向master同步集群应用信息
      */
-    @EL(name = "sys.heartbeat", async = true)
+    // @EL(name = "sys.heartbeat", async = true)
     public void sync() {
         try {
             if (_masterHps.get() == null || _masterHps.get().isEmpty()) {
@@ -328,8 +339,7 @@ public class Remoter extends AioBase {
                 return;
             }
             doSyncFn.get().run();
-            // lastSyncSuccess = System.currentTimeMillis()
-        } catch (Exception ex) {
+        } catch (Throwable ex) {
             sched.after(Duration.ofSeconds(getInteger("errorUpInterval", 30) + new Random().nextInt(60)), this::sync);
             log.error("App up error", ex);
         }
@@ -359,7 +369,6 @@ public class Remoter extends AioBase {
             boolean reply = (ec.completeFn() != null); // 是否需要远程响应执行结果(有完成回调函数就需要远程响应调用结果)
             params.put("reply", reply);
             params.put("name", eName);
-            // params.put("trace", trace)
             if (remoteMethodArgs != null && !remoteMethodArgs.isEmpty()) {
                 JSONArray args = new JSONArray(remoteMethodArgs.size());
                 params.put("args", args);
@@ -690,7 +699,7 @@ public class Remoter extends AioBase {
                     add = false;
                     if (data.getLong("_uptime") > node._uptime) {
                         node.tcp = data.getString("tcp"); node.http = data.getString("http"); node.udp = data.getString("udp"); node.master = data.getBoolean("master"); node._uptime = data.getLong("_uptime");
-                        log.trace("Update node info: {}", node);
+                        log.debug("Update node info: {}", node);
                     }
                     break;
                 } else if (node.tcp.equals(data.getString("tcp"))) {
@@ -852,4 +861,11 @@ public class Remoter extends AioBase {
      * @return
      */
     public AioServer getAioServer() { return aioServer; }
+
+
+    /**
+     * 事件中心
+     * @return {@link EP}
+     */
+    public EP getEp() { return ep; }
 }
