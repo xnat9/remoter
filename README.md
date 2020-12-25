@@ -25,10 +25,13 @@ Object result = remoter.fire("gy", "eName1", Arrays.asList("p1"))
 masterHps: 集群的服务中心地址 host1:port1,host2:port2 ...
 
 hp: 暴露给集群之间通信 ip和端口. 例: ':7001', 或者 'localhost:7001'
+
+master: 是否为服务中心
 ```
 Map<String, Object> attrs = new HashMap<>();
 attrs.put("masterHps", "xnatural.cn:8001");
 attrs.put("hp", ":7001");
+attrs.put("master", true);
 Remoter remoter = new Remoter("应用1", "实例id1", attrs);
 remoter.autoHeartbeat(); // 自动开始向 masterHps 同步集群中所有应用的信息
 // remoter.sync(); // 手动触发同步

@@ -114,7 +114,7 @@ public class Remoter extends AioBase {
      */
     public Remoter(String appName, String appId, Map<String, Object> attrs, ExecutorService exec, EP ep, Sched sched) {
         super(attrs, exec);
-        if (appName == null || appName.isEmpty()) throw new IllegalArgumentException("appName must not be empty");
+        if (appName == null || appName.isEmpty()) throw new IllegalArgumentException("Param appName not empty");
         this.appName = appName;
         this.appId = appId == null || appId.isEmpty() ? UUID.randomUUID().toString().replace("-", "") : appId;
         this.attrs = attrs == null ? new ConcurrentHashMap<>() : attrs;
@@ -548,18 +548,24 @@ public class Remoter extends AioBase {
 
             if (fReply) { // 是否需要响应结果给远程的调用方
                 JSONObject result = new JSONObject(3);
-                byte[] bs = JSON.toJSONString(
-                        new JSONObject(3)
-                                .fluentPut("type", "event")
-                                .fluentPut("source", new JSONObject(2).fluentPut("name", appName).fluentPut("id", appId))
-                                .fluentPut("data", result),
-                        SerializerFeature.WriteMapNullValue
-                ).getBytes(_charset.get());
                 ec.completeFn((ec1) -> {
                     result.put("id", ec.id());
-                    if (!ec.isSuccess()) { result.put("exMsg", ec.failDesc()); }
+                    if (ec.isNoListener()) result.put("exMsg", "Not found '" +eName+ "'");
+                    else if (!ec.isSuccess()) result.put("exMsg", ec.failDesc());
                     result.put("result", ec.result);
-                    se.reply(bs);
+                    try {
+                        se.reply(
+                                JSON.toJSONString(
+                                        new JSONObject(3)
+                                                .fluentPut("type", "event")
+                                                .fluentPut("source", new JSONObject(2).fluentPut("name", appName).fluentPut("id", appId))
+                                                .fluentPut("data", result),
+                                        SerializerFeature.WriteMapNullValue
+                                ).getBytes(_charset.get())
+                        );
+                    } catch (UnsupportedEncodingException e) {
+                        throw new RuntimeException(e);
+                    }
                 });
             }
             ep.fire(eName, ec.sync()); // 同步执行, 没必要异步去切换线程

@@ -16,6 +16,6 @@ public class RemoterTest {
         attrs.put("masterHps", "xnatural.cn:8001");
         Remoter remoter = new Remoter("test", "test1", attrs).autoHeartbeat();
         Thread.sleep(1000L);
-        log.info(remoter.fire("gy", "eName1", Arrays.asList("p1")).toString());
+        log.info(remoter.fire("gy", "eName7", Arrays.asList("p1")).toString());
     }
 }

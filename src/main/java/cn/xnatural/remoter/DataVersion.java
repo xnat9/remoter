@@ -51,8 +51,8 @@ public class DataVersion {
      * @return {@link DataVersion}
      */
     public DataVersion update(String dataKey, Long version, Object data) {
-        if (dataKey == null || dataKey.isEmpty()) throw new IllegalArgumentException("update dataVersion dataKey must not be empty");
-        if (version == null) throw new IllegalArgumentException("update dataVersion version must not be null");
+        if (dataKey == null || dataKey.isEmpty()) throw new IllegalArgumentException("Param dataKey not empty");
+        if (version == null) throw new IllegalArgumentException("Param version required");
         Record record = records.computeIfAbsent(dataKey, (k) -> new Record());
         if (record.version == null || record.version < version) { // 有新版本数据更新
             record.version = version;
@@ -72,11 +72,11 @@ public class DataVersion {
      * @param dataKey 数据key
      * @param version 数据更新版本
      * @param data 数据
-     * @return
+     * @return {@link DataVersion}
      */
     DataVersion receive(String dataKey, Long version, Object data) {
-        if (dataKey == null || dataKey.isEmpty()) throw new IllegalArgumentException("receive dataVersion dataKey must not be empty");
-        if (version == null) throw new IllegalArgumentException("receive dataVersion version must not be null");
+        if (dataKey == null || dataKey.isEmpty()) throw new IllegalArgumentException("Param dataKey not empty");
+        if (version == null) throw new IllegalArgumentException("Param version required");
         Record record = records.computeIfAbsent(dataKey, (k) -> new Record());
         if (record.version == null || record.version < version) {
             record.version = version;
