@@ -17,7 +17,7 @@
 <!--		</rollingPolicy>-->
 <!--	</appender>-->
 
-	<logger name="cn.xnatural.remoter" level="info"/>
+	<logger name="cn.xnatural.remoter" level="trace"/>
 
 	<root level="INFO">
 <!--		<appender-ref ref="DETAIL"/>-->

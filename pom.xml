@@ -7,7 +7,7 @@
     <groupId>cn.xnatural.remoter</groupId>
     <artifactId>remoter</artifactId>
     <packaging>jar</packaging>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
 
     <url>https://gitee.com/xnat/remoter</url>
 
@@ -35,15 +35,15 @@
         <dependency>
             <groupId>cn.xnatural.aio</groupId>
             <artifactId>aio</artifactId>
-            <version>1.0.6</version>
+            <version>1.0.7</version>
         </dependency>
 
-<!--        <dependency>-->
-<!--            <groupId>org.junit.jupiter</groupId>-->
-<!--            <artifactId>junit-jupiter-api</artifactId>-->
-<!--            <version>5.7.0</version>-->
-<!--            <scope>test</scope>-->
-<!--        </dependency>-->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter-api</artifactId>
+            <version>5.7.0</version>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>ch.qos.logback</groupId>
             <artifactId>logback-classic</artifactId>

@@ -78,7 +78,7 @@ class SafeList <E> {
 
     boolean isEmpty() { return data.isEmpty(); }
 
-    boolean contains(Object o) {
+    boolean contains(E o) {
         try {
             lock.readLock().lock();
             return data.contains(o);
@@ -87,7 +87,7 @@ class SafeList <E> {
         }
     }
 
-    boolean remove(Object o) {
+    boolean remove(E o) {
         try {
             lock.writeLock().lock();
             return data.remove(o);

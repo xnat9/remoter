@@ -9,31 +9,31 @@ class Node implements Serializable {
     /**
      * 节点id, 对应 app.id
      */
-    String id;
+    public String id;
     /**
      * 节点名, 对应 app.name
      */
-    String name;
+    public String name;
     /**
      * tcp endpoint -> host:port
      */
-    String tcp;
+    public String tcp;
     /**
      * http endpoint -> host:port
      */
-    String http;
+    public String http;
     /**
      * udp endpoint -> host:port
      */
-    String udp;
+    public String udp;
     /**
      * 是否为 master {@link Remoter#_master}
      */
-    Boolean master;
+    public Boolean master;
     /**
      * 上传数据的时间. app up 时间
      */
-    Long _uptime;
+    public Long _uptime;
 
 
     @Override

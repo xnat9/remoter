@@ -49,6 +49,9 @@ remoter.getEp().addListenerSource(new Object() {
 // 其它应用调用
 Object result = remoter.fire("应用名1", "xx"); // result == "oo"
 ```
+## 远程事件参数类型
+String, Boolean, Short, Integer, Long, Double, Float, BigDecimal, URI
+
 
 ## 异步事件调用
 ```
