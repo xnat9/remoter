@@ -18,6 +18,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.URI;
 import java.net.UnknownHostException;
@@ -531,6 +532,7 @@ public class Remoter extends AioBase {
                 else if (String.class.getName().equals(t)) return jo.getString("value");
                 else if (Boolean.class.getName().equals(t)) return jo.getBoolean("value");
                 else if (Integer.class.getName().equals(t)) return jo.getInteger("value");
+                else if (BigInteger.class.getName().equals(t)) return jo.getBigInteger("value");
                 else if (Long.class.getName().equals(t)) return jo.getLong("value");
                 else if (Double.class.getName().equals(t)) return jo.getDouble("value");
                 else if (Short.class.getName().equals(t)) return jo.getShort("value");
@@ -819,7 +821,7 @@ public class Remoter extends AioBase {
      * 例: {"id":"gy_GRLD5JhT4g", "name":"rc", "tcp":"192.168.2.104:8001", "http":"192.168.2.104:8000", "master": true}
      */
     public Map<String, Object> getAppInfo() {
-        Map<String, Object> info = new LinkedHashMap(5);
+        Map<String, Object> info = new LinkedHashMap<>(5);
         info.put("id", appId);
         info.put("name", appName);
         // http
@@ -832,15 +834,15 @@ public class Remoter extends AioBase {
 
 
     /**
-     * getter {@link AioClient}
-     * @return
+     * getter
+     * @return {@link AioClient}
      */
     public AioClient getAioClient() { return aioClient; }
 
 
     /**
-     * getter {@link AioServer}
-     * @return
+     * getter
+     * @return {@link AioServer}
      */
     public AioServer getAioServer() { return aioServer; }
 

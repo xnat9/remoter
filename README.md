@@ -16,7 +16,7 @@ Object result = remoter.fire("gy", "eName1", Arrays.asList("p1"))
 <dependency>
     <groupId>cn.xnatural.remoter</groupId>
     <artifactId>remoter</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
 </dependency>
 ```
 
@@ -50,7 +50,7 @@ remoter.getEp().addListenerSource(new Object() {
 Object result = remoter.fire("应用名1", "xx"); // result == "oo"
 ```
 ## 远程事件参数类型
-String, Boolean, Short, Integer, Long, Double, Float, BigDecimal, URI
+String, Boolean, Short, BigInteger, Integer, Long, Double, Float, BigDecimal, URI
 
 
 ## 异步事件调用
