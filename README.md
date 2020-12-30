@@ -16,7 +16,7 @@ Object result = remoter.fire("gy", "eName1", Arrays.asList("p1"))
 <dependency>
     <groupId>cn.xnatural.remoter</groupId>
     <artifactId>remoter</artifactId>
-    <version>1.0.1</version>
+    <version>1.0.2</version>
 </dependency>
 ```
 
